@@ -1,0 +1,190 @@
+# =============================================================================
+# n8n — Fully Private & Air-Gapped Docker Compose
+# =============================================================================
+# Architecture:
+#   [n8n] ──► [squid-proxy] ──► Internet (whitelisted domains only)
+#   [n8n] ──► [postgres]    (internal only, no internet)
+#
+# Networks:
+#   • internal-net  → internal: true  (zero internet access)
+#   • egress-net    → bridge          (internet access via proxy only)
+#
+# All n8n outbound traffic is forced through Squid, which enforces
+# the domain whitelist defined in ./squid/whitelist.acl
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — Production-grade persistent storage (replaces default SQLite)
+  # Placed only on internal-net: ZERO internet access
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: n8n-postgres
+    restart: unless-stopped
+    networks:
+      - internal-net
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-n8n}
+      POSTGRES_USER:     ${POSTGRES_USER:-n8n}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-n8n} -d ${POSTGRES_DB:-n8n}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    read_only: false   # postgres needs write access to /var/lib/postgresql/data
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+
+  # ---------------------------------------------------------------------------
+  # Squid — Egress Proxy / Domain Whitelist Enforcer
+  # Sits on BOTH networks: bridges internal-net ↔ egress-net
+  # Only allows outbound connections to domains listed in whitelist.acl
+  # ---------------------------------------------------------------------------
+  squid-proxy:
+    image: ubuntu/squid:latest
+    container_name: n8n-squid
+    restart: unless-stopped
+    networks:
+      - internal-net    # n8n talks to Squid here
+      - egress-net      # Squid reaches the internet from here
+    volumes:
+      - ./squid/squid.conf:/etc/squid/squid.conf:ro
+      - ./squid/whitelist.acl:/etc/squid/whitelist.acl:ro
+      - squid-cache:/var/spool/squid
+      - squid-logs:/var/log/squid
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "squid -k check 2>/dev/null || exit 0"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # n8n — Main Application
+  # Placed ONLY on internal-net → cannot reach internet directly
+  # All outbound HTTP(S) traffic is routed through squid-proxy
+  # ---------------------------------------------------------------------------
+  n8n:
+    image: n8nio/n8n:${N8N_VERSION:-latest}
+    container_name: n8n
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      squid-proxy:
+        condition: service_started
+    networks:
+      - internal-net    # ONLY on internal network — no direct internet
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      # ── Database (PostgreSQL) ──────────────────────────────────────────────
+      DB_TYPE:                      postgresdb
+      DB_POSTGRESDB_HOST:           postgres
+      DB_POSTGRESDB_PORT:           5432
+      DB_POSTGRESDB_DATABASE:       ${POSTGRES_DB:-n8n}
+      DB_POSTGRESDB_USER:           ${POSTGRES_USER:-n8n}
+      DB_POSTGRESDB_PASSWORD:       ${POSTGRES_PASSWORD}
+
+      # ── Encryption ────────────────────────────────────────────────────────
+      N8N_ENCRYPTION_KEY:           ${N8N_ENCRYPTION_KEY}
+
+      # ── Authentication ────────────────────────────────────────────────────
+      N8N_BASIC_AUTH_ACTIVE:        "true"
+      N8N_BASIC_AUTH_USER:          ${N8N_BASIC_AUTH_USER}
+      N8N_BASIC_AUTH_PASSWORD:      ${N8N_BASIC_AUTH_PASSWORD}
+
+      # ── Host & URL ────────────────────────────────────────────────────────
+      N8N_HOST:                     ${N8N_HOST:-localhost}
+      N8N_PORT:                     5678
+      N8N_PROTOCOL:                 ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL:                  ${WEBHOOK_URL:-http://localhost:5678/}
+      N8N_EDITOR_BASE_URL:          ${WEBHOOK_URL:-http://localhost:5678/}
+
+      # ── Timezone ──────────────────────────────────────────────────────────
+      GENERIC_TIMEZONE:             ${GENERIC_TIMEZONE:-UTC}
+      TZ:                           ${GENERIC_TIMEZONE:-UTC}
+
+      # ── TELEMETRY — ALL DISABLED ──────────────────────────────────────────
+      # Disables all analytics, telemetry, and reporting to n8n servers
+      N8N_DIAGNOSTICS_ENABLED:      "false"
+      N8N_DIAGNOSTICS_CONFIG_FRONTEND: ""   # Clears frontend telemetry endpoint
+      N8N_DIAGNOSTICS_CONFIG_BACKEND:  ""   # Clears backend telemetry endpoint
+
+      # ── PHONE HOME — ALL DISABLED ─────────────────────────────────────────
+      # Prevents all version checks, template fetches, and hook file loads
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      N8N_TEMPLATES_ENABLED:        "false"
+      EXTERNAL_FRONTEND_HOOKS_URLS: ""      # Clears hook fetch URL
+      N8N_ONBOARDING_FLOW_DISABLED: "true"
+
+      # ── Community Packages ────────────────────────────────────────────────
+      # Disabled — community packages would need internet at install time
+      N8N_COMMUNITY_PACKAGES_ENABLED: "false"
+
+      # ── Egress Proxy ──────────────────────────────────────────────────────
+      # Forces ALL outbound HTTP/HTTPS through Squid whitelist enforcer
+      HTTP_PROXY:  "http://squid-proxy:3128"
+      HTTPS_PROXY: "http://squid-proxy:3128"
+      NO_PROXY:    "localhost,127.0.0.1,postgres"  # Skip proxy for local services
+
+      # ── Execution & Security ──────────────────────────────────────────────
+      EXECUTIONS_TIMEOUT:           3600    # 1 hour max execution time
+      EXECUTIONS_TIMEOUT_MAX:       7200
+      EXECUTIONS_DATA_PRUNE:        "true"
+      EXECUTIONS_DATA_MAX_AGE:      336     # Prune data older than 14 days
+      N8N_SECURE_COOKIE:            ${N8N_SECURE_COOKIE:-false}
+
+      # ── Logging ───────────────────────────────────────────────────────────
+      # N8N_LOG_LEVEL:                warn
+      N8N_LOG_OUTPUT:               console
+
+    volumes:
+      - n8n-data:/home/node/.n8n
+    security_opt:
+      - no-new-privileges:true
+    # n8n runs as node user (uid 1000) inside the container
+    user: "1000:1000"
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  internal-net:
+    driver: bridge
+    internal: true          # ← Key: NO gateway, NO internet access from this network
+    name: n8n-internal
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+  egress-net:
+    driver: bridge
+    internal: false         # Squid proxy only — has controlled internet access
+    name: n8n-egress
+    ipam:
+      config:
+        - subnet: 172.20.1.0/24
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres-data:
+    name: n8n-postgres-data
+  n8n-data:
+    name: n8n-app-data
+  squid-cache:
+    name: n8n-squid-cache
+  squid-logs:
+    name: n8n-squid-logs

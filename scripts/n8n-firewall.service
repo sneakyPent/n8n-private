@@ -1,0 +1,32 @@
+# =============================================================================
+# n8n-firewall.service — Systemd unit to apply iptables rules at boot
+# =============================================================================
+# Install:
+#   sudo cp scripts/n8n-firewall.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable n8n-firewall.service
+#   sudo systemctl start n8n-firewall.service
+# =============================================================================
+
+[Unit]
+Description=n8n Egress Firewall Rules
+Documentation=https://github.com/yourcompany/n8n-private
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Adjust this path to wherever you cloned the repo
+ExecStart=/bin/bash /opt/n8n-private/scripts/iptables-setup.sh
+
+# On stop: flush DOCKER-USER rules (restore open state)
+ExecStop=/sbin/iptables -F DOCKER-USER
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
