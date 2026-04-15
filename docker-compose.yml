@@ -2,11 +2,12 @@
 # n8n — Fully Private & Air-Gapped Docker Compose
 # =============================================================================
 # Architecture:
-#   [n8n] ──► [squid-proxy] ──► Internet (whitelisted domains only)
-#   [n8n] ──► [postgres]    (internal only, no internet)
+#   Host :5678 ──► [n8n-web] ──► [n8n] ──► [squid-proxy] ──► Internet (whitelisted domains only)
+#                           └─► [postgres] (internal only, no internet)
 #
 # Networks:
-#   • internal-net  → internal: true  (zero internet access)
+#   • internal-net  → internal: true  (zero internet access for n8n/postgres)
+#   • frontend-net  → bridge          (host ↔ reverse proxy only)
 #   • egress-net    → bridge          (internet access via proxy only)
 #
 # All n8n outbound traffic is forced through Squid, which enforces
@@ -70,6 +71,33 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
+  # n8n Web Gateway — Publishes localhost:5678 while n8n stays on internal-net
+  # Required on Docker Desktop/Windows because a service attached only to an
+  # internal Docker network does not get a usable host port listener.
+  # ---------------------------------------------------------------------------
+  n8n-web:
+    image: nginx:1.27-alpine
+    container_name: n8n-web
+    restart: unless-stopped
+    depends_on:
+      n8n:
+        condition: service_started
+    networks:
+      - frontend-net
+      - internal-net
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    volumes:
+      - ./nginx/n8n.conf:/etc/nginx/nginx.conf:ro
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+
+  # ---------------------------------------------------------------------------
   # n8n — Main Application
   # Placed ONLY on internal-net → cannot reach internet directly
   # All outbound HTTP(S) traffic is routed through squid-proxy
@@ -85,8 +113,6 @@ services:
         condition: service_started
     networks:
       - internal-net    # ONLY on internal network — no direct internet
-    ports:
-      - "${N8N_PORT:-5678}:5678"
     environment:
       # ── Database (PostgreSQL) ──────────────────────────────────────────────
       DB_TYPE:                      postgresdb
@@ -167,6 +193,14 @@ networks:
     ipam:
       config:
         - subnet: 172.20.0.0/24
+
+  frontend-net:
+    driver: bridge
+    internal: false
+    name: n8n-frontend
+    ipam:
+      config:
+        - subnet: 172.20.2.0/24
 
   egress-net:
     driver: bridge

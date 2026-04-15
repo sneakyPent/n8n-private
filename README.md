@@ -6,35 +6,31 @@ A production-grade, privacy-first n8n setup with **zero telemetry**, **domain-wh
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  HOST MACHINE                                                    │
-│                                                                  │
-│  ┌─────────────────────────┐   ┌──────────────────────────────┐  │
-│  │   internal-net          │   │   egress-net                 │  │
-│  │   172.20.0.0/24         │   │   172.20.1.0/24              │  │
-│  │   internal: true ✓      │   │   (internet access)          │  │
-│  │                         │   │                              │  │
-│  │  ┌──────────┐           │   │                              │  │
-│  │  │  n8n     │──proxy──► │   │ ┌───────────────┐            │  │
-│  │  │ :5678    │           │   │ │ squid-proxy   │──► *.yourco│  │
-│  │  └──────────┘           │   │ │ :3128         │──► copilot │  │
-│  │        │                │   │ │ (ACL enforced)│    DENIED  │  │
-│  │  ┌──────────┐           │   │ └───────────────┘  everything│  │
-│  │  │ postgres │           │   │         │            else    │  │
-│  │  │ :5432    │           │   └─────────┼────────────────────┘  │
-│  │  └──────────┘           │             │                       │
-│  └─────────────────────────┘      iptables DOCKER-USER           │
-│                                   (kernel-level block)           │
-└──────────────────────────────────────────────────────────────────┘
-                                           │
-                                     [ Internet ]
-                                           │
-                              .yourcompany.com ✅ ALLOWED
-                              api.openai.com   ✅ ALLOWED
-                              telemetry.n8n.io ❌ BLOCKED
-                              *.google.com     ❌ BLOCKED
-                              everything else  ❌ BLOCKED
+```text
+HOST MACHINE
+
+  frontend-net (host access)
+    localhost:5678
+         |
+         v
+      [n8n-web]
+         |
+         v
+  internal-net (172.20.0.0/24, internal: true)
+    [n8n] <----> [postgres]
+      |
+      | proxy
+      v
+    [squid-proxy]
+         |
+         v
+  egress-net (172.20.1.0/24)
+         |
+         v
+      Internet
+
+Allowed:  .yourcompany.com, api.openai.com
+Blocked:  telemetry.n8n.io, *.google.com, everything else
 ```
 
 ### Security layers
@@ -43,6 +39,7 @@ A production-grade, privacy-first n8n setup with **zero telemetry**, **domain-wh
 |-------|-----------|----------------|
 | **L1** | n8n env vars | n8n-level telemetry calls disabled at the app level |
 | **L2** | Docker `internal: true` | No gateway on internal-net → containers physically can't route to internet |
+| **L2.5** | `n8n-web` reverse proxy | Publishes `localhost:5678` without attaching `n8n` itself to a non-internal network |
 | **L3** | Squid ACL whitelist | HTTP/HTTPS proxy enforces domain allowlist; denies everything else |
 | **L4** | iptables DOCKER-USER | Kernel drops any packet from internal-net not destined for egress-net |
 
@@ -76,11 +73,15 @@ chmod +x scripts/update-whitelist.sh
 
 This reads `COMPANY_DOMAIN`, `COPILOT_DOMAIN`, and `EXTRA_ALLOWED_DOMAINS` from `.env` and writes `squid/whitelist.acl`.
 
+If you want `scripts/test-proxy.sh` to validate wildcard matching against a real subdomain, also set `COMPANY_TEST_SUBDOMAIN` in `.env` (for example `app.yourcompany.com`). If it is unset, the script skips the subdomain check instead of guessing `sub.<domain>`.
+
 ### 3. Start services
 
 ```bash
 docker compose up -d
 ```
+
+On Docker Desktop / Windows, `n8n` itself is intentionally **not** published directly. Instead, the `n8n-web` container publishes `localhost:5678` and reverse-proxies to `n8n` over the internal Docker network. This avoids the host reachability issue that occurs when a service is attached only to an `internal: true` network.
 
 ### 4. Apply host firewall (recommended — requires root)
 
@@ -88,6 +89,8 @@ docker compose up -d
 sudo chmod +x scripts/iptables-setup.sh
 sudo ./scripts/iptables-setup.sh
 ```
+
+> On Windows hosts, skip this step. `scripts/iptables-setup.sh` is Linux-only and cannot run under Docker Desktop/Windows PowerShell.
 
 ### 5. Make firewall persistent across reboots
 
@@ -211,6 +214,8 @@ n8n-private/
 ├── .env.example                # Template — copy to .env
 ├── .env                        # YOUR secrets (gitignored)
 ├── .gitignore
+├── nginx/
+│   └── n8n.conf                # Reverse proxy exposing localhost:5678
 ├── squid/
 │   ├── squid.conf              # Squid proxy configuration
 │   └── whitelist.acl           # Domain allowlist (generated)

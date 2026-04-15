@@ -78,7 +78,13 @@ expect_allowed() {
     PASS=$((PASS + 1))
   else
     echo -e "  ${RED}❌ FAIL${RESET}      $label  ${BOLD}(expected ALLOWED)${RESET}"
-    echo -e "             ${YELLOW}↳ Squid: ${response:-no response / timeout}${RESET}"
+    if [[ -z "$response" ]]; then
+      echo -e "             ${YELLOW}↳ Squid: no response / timeout${RESET}"
+      echo -e "             ${YELLOW}↳ Hint: ACL may be correct, but Squid could not complete upstream DNS/TCP connect in time.${RESET}"
+      echo -e "             ${YELLOW}↳ Check squid.conf DNS settings and outbound reachability from the squid container.${RESET}"
+    else
+      echo -e "             ${YELLOW}↳ Squid: $response${RESET}"
+    fi
     FAIL=$((FAIL + 1))
   fi
 }
@@ -146,6 +152,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 COMPANY_DOMAIN=""
+COMPANY_TEST_SUBDOMAIN=""
 COPILOT_DOMAIN=""
 EXTRA_ALLOWED_DOMAINS=""
 
@@ -155,6 +162,7 @@ while IFS='=' read -r key value; do
   value="$(echo "$value" | sed 's/#.*//' | xargs)"
   case "$key" in
     COMPANY_DOMAIN)        COMPANY_DOMAIN="$value" ;;
+    COMPANY_TEST_SUBDOMAIN) COMPANY_TEST_SUBDOMAIN="$value" ;;
     COPILOT_DOMAIN)        COPILOT_DOMAIN="$value" ;;
     EXTRA_ALLOWED_DOMAINS) EXTRA_ALLOWED_DOMAINS="$value" ;;
   esac
@@ -230,7 +238,11 @@ header "2 / Whitelisted Domains — Must Be ALLOWED"
 # Company domain
 if [[ -n "$COMPANY_DOMAIN" ]]; then
   expect_allowed "$COMPANY_DOMAIN" 443 "Company domain: $COMPANY_DOMAIN"
-  expect_allowed "sub.${COMPANY_DOMAIN}" 443 "Company subdomain: sub.$COMPANY_DOMAIN"
+  if [[ -n "$COMPANY_TEST_SUBDOMAIN" ]]; then
+    expect_allowed "$COMPANY_TEST_SUBDOMAIN" 443 "Company subdomain: $COMPANY_TEST_SUBDOMAIN"
+  else
+    echo -e "  ${YELLOW}⚠️  COMPANY_TEST_SUBDOMAIN not set in .env — skipping wildcard-subdomain validation${RESET}"
+  fi
 else
   echo -e "  ${YELLOW}⚠️  COMPANY_DOMAIN not set in .env — skipping${RESET}"
 fi
