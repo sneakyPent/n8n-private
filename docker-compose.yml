@@ -64,6 +64,9 @@ services:
       - squid-logs:/var/log/squid
     security_opt:
       - no-new-privileges:true
+    extra_hosts:
+        - "host.docker.internal:host-gateway"
+        - "vllm-host:172.30.5.204"
     healthcheck:
       test: ["CMD-SHELL", "squid -k check 2>/dev/null || exit 0"]
       interval: 15s
@@ -96,6 +99,9 @@ services:
       - /var/cache/nginx
       - /var/run
       - /tmp
+    extra_hosts:
+        - "host.docker.internal:host-gateway"
+        - "vllm-host:172.30.5.204"  # Allows nginx to resolve host.docker.internal to the host's IP
 
   # ---------------------------------------------------------------------------
   # n8n — Main Application
@@ -113,6 +119,9 @@ services:
         condition: service_started
     networks:
       - internal-net    # ONLY on internal network — no direct internet
+#    extra_hosts:
+#        - "host.docker.internal:host-gateway"
+#        - "vllm-host:172.30.5.204"
     environment:
       # ── Database (PostgreSQL) ──────────────────────────────────────────────
       DB_TYPE:                      postgresdb
@@ -162,7 +171,7 @@ services:
       # Forces ALL outbound HTTP/HTTPS through Squid whitelist enforcer
       HTTP_PROXY:  "http://squid-proxy:3128"
       HTTPS_PROXY: "http://squid-proxy:3128"
-      NO_PROXY:    "localhost,127.0.0.1,postgres"  # Skip proxy for local services
+      NO_PROXY:    "localhost,127.0.0.1,::1,postgres"  # Skip proxy for local services
 
       # ── Execution & Security ──────────────────────────────────────────────
       EXECUTIONS_TIMEOUT:           3600    # 1 hour max execution time
