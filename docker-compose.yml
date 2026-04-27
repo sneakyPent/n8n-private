@@ -186,10 +186,44 @@ services:
 
     volumes:
       - n8n-data:/home/node/.n8n
+      - ./config:/home/node/.n8n-files:ro
     security_opt:
       - no-new-privileges:true
     # n8n runs as node user (uid 1000) inside the container
     user: "1000:1000"
+
+  # ---------------------------------------------------------------------------
+  # Mail Relay — Internal SMTP relay for n8n
+  # n8n sends to this service over internal-net; this relay forwards upstream
+  # ---------------------------------------------------------------------------
+  mail-relay:
+    build:
+      context: ./mail-relay
+    container_name: n8n-mail-relay
+    restart: unless-stopped
+    networks:
+      - internal-net
+      - egress-net
+    environment:
+      MAIL_RELAY_HOSTNAME: ${MAIL_RELAY_HOSTNAME:-mail-relay.local}
+      MAIL_RELAY_NETWORKS: ${MAIL_RELAY_NETWORKS:-172.20.0.0/24}
+      MAIL_UPSTREAM_HOST: ${MAIL_UPSTREAM_HOST}
+      MAIL_UPSTREAM_PORT: ${MAIL_UPSTREAM_PORT:-587}
+      MAIL_UPSTREAM_USERNAME: ${MAIL_UPSTREAM_USERNAME:-}
+      MAIL_UPSTREAM_PASSWORD: ${MAIL_UPSTREAM_PASSWORD:-}
+      MAIL_TLS_SECURITY_LEVEL: ${MAIL_TLS_SECURITY_LEVEL:-encrypt}
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pidfile=/var/spool/postfix/pid/master.pid; test -s \"$pidfile\" && kill -0 \"$(cat \"$pidfile\")\""
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 # =============================================================================
 # Networks

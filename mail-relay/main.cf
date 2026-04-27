@@ -1,0 +1,37 @@
+compatibility_level = 3.6
+
+myhostname = mail-relay.local
+myorigin = localdomain
+
+inet_interfaces = all
+inet_protocols = ipv4
+
+mydestination =
+local_recipient_maps =
+unknown_local_recipient_reject_code = 550
+
+mynetworks = 127.0.0.0/8, 172.20.0.0/24
+
+smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
+smtpd_recipient_restrictions = permit_mynetworks, reject_unauth_destination
+
+relay_domains =
+alias_maps = hash:/etc/aliases
+alias_database = hash:/etc/aliases
+
+mailbox_size_limit = 0
+recipient_delimiter = +
+
+relayhost =
+
+smtp_use_tls = yes
+smtp_tls_security_level = encrypt
+smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
+smtp_tls_note_starttls_offer = yes
+
+smtp_sasl_auth_enable = yes
+smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
+smtp_sasl_security_options = noanonymous
+smtp_sasl_tls_security_options = noanonymous
+
+maillog_file = /dev/stdout

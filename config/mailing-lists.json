@@ -1,0 +1,22 @@
+{
+  "dailyReport": {
+    "to": [
+      "alice@example.com",
+      "bob@example.com"
+    ],
+    "cc": [
+      "manager@example.com"
+    ],
+    "bcc": []
+  },
+  "incidentReport": {
+    "to": [
+      "ops@example.com",
+      "lead@example.com"
+    ],
+    "cc": [],
+    "bcc": [
+      "audit@example.com"
+    ]
+  }
+}
