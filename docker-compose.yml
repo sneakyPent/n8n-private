@@ -109,8 +109,11 @@ services:
   # All outbound HTTP(S) traffic is routed through squid-proxy
   # ---------------------------------------------------------------------------
   n8n:
-    image: n8nio/n8n:${N8N_VERSION:-latest}
     container_name: n8n
+    build:
+      context: ./n8n
+      args:
+        N8N_VERSION: ${N8N_VERSION}
     restart: unless-stopped
     depends_on:
       postgres:
